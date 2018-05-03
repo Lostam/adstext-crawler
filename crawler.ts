@@ -3,15 +3,19 @@ const values = require('./setting').value;
 if (values.length == 0 || values[0] == "[ADD YOUR TEXT HERE]") {
     throw ("Please insert values to search in setting.js")
 }
+
 //todo prevent duplication when writing to file
 class Crawler {
+    private BATCH_SIZE: number = 400;
+
     async crawl(domains: string[]) {
-        let y;
-        while (domains.length > 100) {
-            y = domains.splice(0, 300);
-            await this.batchRequest(y);
+        let batch;
+        while (domains.length > 0) {
+            let maxCount = this.BATCH_SIZE < domains.length ? this.BATCH_SIZE : domains.length;
+            batch = domains.splice(0, maxCount);
+            await this.batchRequest(batch);
         }
-        console.log('Finished')
+        console.log('Finished');
     }
 
     async batchRequest(domains: string[]) {
@@ -27,8 +31,8 @@ class Crawler {
             if (domainObj !== null) {
                 let domain = Object.keys(domainObj)[0];
                 let flag = false;
-                values.forEach((item) => {
-                    if (domainObj[domain].indexOf(item) !== -1) {
+                values.forEach((textToSearch) => {
+                    if (domainObj[domain].indexOf(textToSearch) !== -1) {
                         flag = true;
                     }
                 });
@@ -44,7 +48,7 @@ class Crawler {
     static async makeRequest(domain: string): Promise<any> {
         let x;
         try {
-            x = await axios.get('http://www.' + domain + '/ads.txt');
+            x = await axios.get('http://www.' + domain + '/ads.txt')
         }
         catch (e) {
             console.log("Error: " + domain);
@@ -98,8 +102,19 @@ function shuffle(array) {
  * @param {string} pathToAppend the file path
  */
 function writeToFile(strArr: string | string[], pathToAppend: string = "./" + new Date().toDateString() + ".txt"): void {
+    console.log(strArr);
     if (Array.isArray(strArr)) {
-        strArr = strArr.join("\n")
+        if (strArr.length === 0) return;
+        // checking if it's windows or unix and based on the result determines which break space to use
+        let is_win = process.platform == "win32";
+        let break_space = is_win ? "\r\n" : "\n";
+        strArr = strArr.join(break_space)
     }
-    fs.writeFile(pathToAppend, strArr);
+    console.info("Writing to file...");
+
+    fs.appendFile(pathToAppend, strArr, (error) => {
+        if (error) {
+            console.error(error);
+        }
+    });
 }

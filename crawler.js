@@ -5,11 +5,15 @@ if (values.length == 0 || values[0] == "[ADD YOUR TEXT HERE]") {
 }
 //todo prevent duplication when writing to file
 class Crawler {
+    constructor() {
+        this.BATCH_SIZE = 400;
+    }
     async crawl(domains) {
-        let y;
-        while (domains.length > 100) {
-            y = domains.splice(0, 300);
-            await this.batchRequest(y);
+        let batch;
+        while (domains.length > 0) {
+            let maxCount = this.BATCH_SIZE < domains.length ? this.BATCH_SIZE : domains.length;
+            batch = domains.splice(0, maxCount);
+            await this.batchRequest(batch);
         }
         console.log('Finished');
     }
@@ -26,8 +30,8 @@ class Crawler {
             if (domainObj !== null) {
                 let domain = Object.keys(domainObj)[0];
                 let flag = false;
-                values.forEach((item) => {
-                    if (domainObj[domain].indexOf(item) !== -1) {
+                values.forEach((textToSearch) => {
+                    if (domainObj[domain].indexOf(textToSearch) !== -1) {
                         flag = true;
                     }
                 });
@@ -86,9 +90,20 @@ function shuffle(array) {
  * @param {string} pathToAppend the file path
  */
 function writeToFile(strArr, pathToAppend = "./" + new Date().toDateString() + ".txt") {
+    console.log(strArr);
     if (Array.isArray(strArr)) {
-        strArr = strArr.join("\n");
+        if (strArr.length === 0)
+            return;
+        // checking if it's windows or unix and based on the result determines which break space to use
+        let is_win = process.platform == "win32";
+        let break_space = is_win ? "\r\n" : "\n";
+        strArr = strArr.join(break_space);
     }
-    fs.writeFile(pathToAppend, strArr);
+    console.info("Writing to file...");
+    fs.appendFile(pathToAppend, strArr, (error) => {
+        if (error) {
+            console.error(error);
+        }
+    });
 }
 //# sourceMappingURL=crawler.js.map
