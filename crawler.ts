@@ -102,19 +102,55 @@ function shuffle(array) {
  * @param {string} pathToAppend the file path
  */
 function writeToFile(strArr: string | string[], pathToAppend: string = "./" + new Date().toDateString() + ".txt"): void {
-    console.log(strArr);
+    // checking if it's windows or unix and based on the result determines which break space to use
+    let is_win = get_is_windows();
+    let break_space = is_win ? "\r\n" : "\n";
     if (Array.isArray(strArr)) {
         if (strArr.length === 0) return;
-        // checking if it's windows or unix and based on the result determines which break space to use
-        let is_win = process.platform == "win32";
-        let break_space = is_win ? "\r\n" : "\n";
+        //todo add a string check
+        let exisitingDomains: string[] | null = getFoundDomains(pathToAppend, break_space);
+        strArr = exisitingDomains ? array1_minus_array2(strArr, exisitingDomains) : strArr;
         strArr = strArr.join(break_space)
     }
     console.info("Writing to file...");
-
     fs.appendFile(pathToAppend, strArr, (error) => {
         if (error) {
             console.error(error);
         }
     });
+}
+
+/**
+ *
+ * @param {string} file_path
+ * @param {string} break_space which break space the use (e.g \n or \r\n)
+ * @returns {any} the list of domains from the existing file, if dose'nt exist returns null;
+ */
+function getFoundDomains(file_path: string, break_space: string) {
+    try {
+        return fs.readFileSync(file_path, "utf8").split(break_space);
+    }
+    catch (err) {
+        return null;
+    }
+}
+
+/**
+ *
+ * @param arr1 a string array
+ * @param arr2 a string array
+ * @returns {string[]} all the items in arr1 minus the items in arr2
+ */
+function array1_minus_array2(arr1, arr2): string[] {
+    return arr1.filter((item) => {
+        return arr2.indexOf(item) === -1;
+    })
+}
+
+/**
+ *
+ * @returns {boolean} true if the operating system is windows and false otherwise
+ */
+function get_is_windows() {
+    return process.platform == "win32";
 }
