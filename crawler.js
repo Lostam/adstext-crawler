@@ -1,76 +1,138 @@
+const fs = require('fs');
 const axios = require('axios');
 const values = require('./setting').value;
-const memwatch = require('memwatch-next');
-const fs = require('fs');
+// const memwatch = require('memwatch-next');
+let REGEX = new RegExp(".*.com,.(p|[0-9])");
 if (values.length == 0 || values[0] == "[ADD YOUR TEXT HERE]") {
     throw ("Please insert values to search in setting.js");
 }
-setTimeout(() => {
-    process.exit(1);
-}, 1000 * 60 * 10);
-memwatch.on('leak', (info) => {
-    console.error('Memory leak detected:\n', info);
-    process.exit(1);
-});
-//todo prevent duplication when writing to file
+// let random = 1000*60*10*((Math.random()*6)+1);
+// console.log(`restarting in ${random/1000/60}`);
+// setTimeout(()=>{
+//     console.log("killing");
+//     process.exit(1);
+// },random);
 class Crawler {
-    constructor() {
-        this.BATCH_SIZE = 400;
-        this.DOMAINS_FILE_NAME = './domain_list.txt';
+    constructor(inputFile, outputFile) {
+        Crawler.FOUND_DOMAIN_FILE_NAME = outputFile ? outputFile : Crawler.FOUND_DOMAIN_FILE_NAME;
+        Crawler.DOMAINS_FILE_NAME = inputFile ? inputFile : Crawler.DOMAINS_FILE_NAME;
+        if (!fs.existsSync(Crawler.DOMAINS_FILE_NAME)) {
+            console.log("Input file doe's not exist : " + Crawler.DOMAINS_FILE_NAME);
+            throw "File not found";
+        }
+        console.log("Started reading file...");
+        console.time("readFile");
+        let txt = fs.readFileSync(Crawler.DOMAINS_FILE_NAME, 'utf8');
+        console.log("Read from file took : ");
+        console.timeEnd("readFile");
+        let domains = txt.split('\n');
+        console.log(`${domains.length} domains left`);
+        domains = domains.map((domain) => {
+            return domain.replace('\r', '');
+        });
+        console.time("shuffle");
+        domains = Crawler.shuffle(domains);
+        console.timeEnd("shuffle");
+        this.crawl(domains);
     }
     async crawl(domains) {
-        let batch;
         while (domains.length > 0) {
-            let maxCount = this.BATCH_SIZE < domains.length ? this.BATCH_SIZE : domains.length;
-            batch = domains.splice(0, maxCount);
-            await this.batchRequest(batch);
+            let maxCount = Crawler.BATCH_SIZE < domains.length ? Crawler.BATCH_SIZE : domains.length;
+            let batch = domains.splice(0, maxCount);
+            console.time("Crawling");
+            console.log(`Starting crawl, batch size : ${batch.length}`);
+            let foundDomains = await this.batchRequest(batch);
+            console.timeEnd("Crawling");
+            console.log(`found ${foundDomains.length} domains`);
+            await Crawler.saveAndDelete(foundDomains, batch);
         }
         console.log('Finished');
     }
+    /**
+     * Saving the domains to the out file and removes them from the origin file to prevent duplicate requests
+     * @param {string[]} domains
+     * @returns {Promise<void>}
+     */
+    static async saveAndDelete(domains_to_add, domains_to_delete) {
+        // if (domains_to_add.length == 0){
+        //     return;
+        // }
+        this.writeToFile(domains_to_add);
+        await Crawler.removeQueriedDomains(domains_to_delete);
+    }
     async batchRequest(domains) {
-        // return new Promise((resolve, reject) => {
-        let asyncArr = [];
-        console.log('Batch Size : ' + domains.length);
-        for (let domain of domains) {
-            asyncArr.push(Crawler.makeRequest(domain));
+        let waitForResults = domains.map((domain) => {
+            return Crawler.promiseArrToSingle(Crawler.makeMultipleRequests(domain))
+                .then(res => {
+                return { [domain]: res };
+            });
+        });
+        const results = await Promise.all(waitForResults);
+        return results
+            // filter out site's with out required ads txt
+            .filter((item) => {
+            return Crawler.isArrInString(values, item[Object.keys(item)[0]]);
+        })
+            // map only the domains
+            .map(item => {
+            return Object.keys(item)[0];
+        });
+        // this.removeQueriedDomains(domains);
+    }
+    /**
+     * the issue : if one promise in an array of promises fails then Promise.all fails as well
+     * the solution : resolving all the promises before using in Promise.all
+     * @param {Promise<any>[]} arr
+     * @returns {Promise<any>[]}
+     */
+    static formatArrOfPromise(arr) {
+        return arr.map(item => {
+            return item.then(x => {
+                return x;
+            }).catch(x => {
+                return x;
+            });
+        });
+    }
+    /**
+     * making 4 requests for each domain
+     * @param {string} domain
+     * @returns {Promise<{data: any}>[]}
+     */
+    static makeMultipleRequests(domain) {
+        let urls = [
+            'http://www.' + domain + '/ads.txt',
+            'https://www.' + domain + '/ads.txt',
+            'http://' + domain + '/ads.txt',
+            'https://' + domain + '/ads.txt'
+        ];
+        let promise_arr = [];
+        for (let url of urls) {
+            promise_arr.push(axios.get(url));
         }
-        let adsTextArr = await Promise.all(asyncArr);
-        let domainArr = [];
-        adsTextArr.forEach((domainObj) => {
-            if (domainObj !== null) {
-                let domain = Object.keys(domainObj)[0];
-                let flag = false;
-                values.forEach((textToSearch) => {
-                    if (typeof domainObj[domain] === 'string') {
-                        if (domainObj[domain].indexOf(textToSearch) !== -1) {
-                            flag = true;
+        return this.formatArrOfPromise(promise_arr);
+    }
+    static async promiseArrToSingle(arr) {
+        return Promise.all(arr).then(res => {
+            for (let item of res) {
+                if (item.data && typeof item.data === "string" && item.data.search(REGEX) > -1) {
+                    return item.data;
+                }
+                else if (item.data && typeof item.data !== "string") {
+                    fs.appendFile("./error.txt", item.data, (error) => {
+                        if (error) {
+                            console.error(error);
                         }
-                    }
-                });
-                if (flag) {
-                    domainArr.push(domain);
+                    });
                 }
             }
-        });
-        this.removeQueriedDomains(domains);
-        this.writeToFile(domainArr);
-        return;
-    }
-    static async makeRequest(domain) {
-        let x;
-        try {
-            x = await axios.get('http://www.' + domain + '/ads.txt');
-        }
-        catch (e) {
-            // console.log("Error: " + domain);
             return null;
-        }
-        return { [domain]: x.data };
+        });
     }
     /**
      *
      * @param array an array to shuffle
-     * @returns {any} shuffles the array and returns it
+     * @returns {string[]} shuffles the array and returns it
      */
     static shuffle(array) {
         let currentIndex = array.length, temporaryValue, randomIndex;
@@ -91,27 +153,29 @@ class Crawler {
      * @param {string} strArr the content
      * @param {string} pathToAppend the file path
      */
-    writeToFile(strArr, pathToAppend = "./" + new Date().toDateString() + ".txt") {
+    static writeToFile(strArr, pathToAppend = this.FOUND_DOMAIN_FILE_NAME) {
         // checking if it's windows or unix and based on the result determines which break space to use
         if (Array.isArray(strArr)) {
             if (strArr.length === 0)
                 return;
             //todo add a string check
-            let exisitingDomains = getFoundDomains(pathToAppend);
-            strArr = exisitingDomains ? array1_minus_array2(strArr, exisitingDomains) : strArr;
-            strArr = BREAK_SPACE + strArr.join(BREAK_SPACE);
+            let existingDomains = Crawler.getFoundDomains(pathToAppend);
+            strArr = existingDomains ? Crawler.array1_minus_array2(strArr, existingDomains) : strArr;
+            strArr = Crawler.BREAK_SPACE + strArr.join(Crawler.BREAK_SPACE);
         }
+        console.time("write to file");
         console.info(`Writing to file...`);
         fs.appendFile(pathToAppend, strArr, (error) => {
             if (error) {
                 console.error(error);
             }
+            console.timeEnd("write to file");
         });
     }
     /**
      *
      * @param {string} file_path
-     * @returns {any} the list of domains from the existing file, if dose'nt exist returns null;
+     * @returns {string} the list of domains from the existing file, if dose'nt exist returns null;
      */
     static getFoundDomains(file_path) {
         try {
@@ -127,7 +191,7 @@ class Crawler {
      * @param arr2 a string array
      * @returns {string[]} all the items in arr1 minus the items in arr2
      */
-    array1_minus_array2(arr1, arr2) {
+    static array1_minus_array2(arr1, arr2) {
         return arr1.filter((item) => {
             return arr2.indexOf(item) === -1;
         });
@@ -139,28 +203,42 @@ class Crawler {
     static get_is_windows() {
         return process.platform == "win32";
     }
-    removeQueriedDomains(domainsToRemove) {
-        fs.readFile(this.DOMAINS_FILE_NAME, 'utf8', (err, data) => {
-            if (err) {
-                console.log(err);
-                return;
-            }
-            let domains = data.split(Crawler.BREAK_SPACE).map(domain => {
-                return domain.replace('\r', '');
+    static removeQueriedDomains(domainsToRemove) {
+        return new Promise((resolve) => {
+            fs.readFile(this.DOMAINS_FILE_NAME, 'utf8', (err, data) => {
+                if (err) {
+                    console.log(err);
+                    resolve();
+                }
+                let domains = data.split(Crawler.BREAK_SPACE).map(domain => {
+                    return domain.replace('\r', '');
+                });
+                let newText = this.array1_minus_array2(domains, domainsToRemove);
+                fs.writeFileSync(this.DOMAINS_FILE_NAME, newText.join('\n'));
+                resolve();
             });
-            let newText = this.array1_minus_array2(domains, domainsToRemove);
-            fs.writeFileSync(this.DOMAINS_FILE_NAME, newText.join('\n'));
         });
     }
+    /**
+     *
+     * @param {string[]} arr array of strings
+     * @param {string} stringToSearch
+     * @returns {boolean}
+     */
+    static isArrInString(arr, stringToSearch) {
+        for (let item of arr) {
+            if (typeof stringToSearch === "string" && stringToSearch.includes(item)) {
+                return true;
+            }
+        }
+        return false;
+    }
 }
+Crawler.BATCH_SIZE = 200;
+Crawler.DOMAINS_FILE_NAME = './domain_list.txt';
+Crawler.FOUND_DOMAIN_FILE_NAME = './found_domains.txt';
 Crawler.BREAK_SPACE = Crawler.get_is_windows() ? "\r\n" : "\n";
-let txt = fs.readFileSync(DOMAINS_FILE_NAME, 'utf8');
-let domains = txt.split('\n');
-domains = domains.map(domain => {
-    return domain.replace('\r', '');
-});
-// Used like so
-domains = Crawler.shuffle(domains);
-let crawler = new Crawler();
-crawler.crawl(domains);
+new Crawler("./domain_list_1.txt");
+// let arr = Crawler.makeMultipleRequests("india.com");
+// arr.map(item=>{item.then(console.log)});
 //# sourceMappingURL=crawler.js.map

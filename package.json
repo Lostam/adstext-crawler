@@ -10,11 +10,9 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@types/axios": "^0.14.0",
     "@types/node": "^8.10.11"
   },
   "dependencies": {
-    "axios": "^0.18.0",
-    "memwatch-next": "^0.3.0"
+    "axios": "^0.18.0"
   }
 }
